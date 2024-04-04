@@ -164,3 +164,7 @@ for epoch in range(epochs):
             print(f"Batch: {i+1}/{len(train_dataloader)}, Loss: {total_loss/(i+1)}")
     
     print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_dataloader)}")
+
+save_directory = './pretrained'  # Specify your save directory
+tokenizer.save_pretrained(save_directory)
+model.save_pretrained(save_directory)
