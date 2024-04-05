@@ -1,0 +1,4 @@
+env/
+pretrained/
+large-pretrained/
+__pycache__/

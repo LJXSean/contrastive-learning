@@ -81,8 +81,9 @@ from torch.utils.data import DataLoader
 
 tokenized.set_format("torch")
 
-small_train_dataset = tokenized.shuffle(seed=42).select(range(1000))
+small_train_dataset = tokenized.shuffle(seed=42).select(range(6144))
 train_dataloader = DataLoader(small_train_dataset, shuffle=True, batch_size=32)
+#train_dataloader = DataLoader(tokenized, shuffle=True, batch_size=32)
 
 for batch in train_dataloader:
     # Shape = [#featuress, #batch_size, #tensor_length]
@@ -125,6 +126,7 @@ def contrastive_loss(embeddings, temperature=0.1):
 
 from torch.optim import AdamW
 from transformers import RobertaModel
+import time
 
 def train(batch):
     input_ids = batch['input_ids']
@@ -146,7 +148,7 @@ def train(batch):
 model = RobertaModel.from_pretrained('roberta-base')
 optimizer = AdamW(model.parameters(), lr=5e-5)
 epochs = 2
-
+start = time.time()
 for epoch in range(epochs):
     total_loss = 0
     # Shape = [#features, #batch_size, #tensor_length]
@@ -159,12 +161,11 @@ for epoch in range(epochs):
         optimizer.step()
         
         total_loss += loss.item()
-
-        if i % 4 == 0:
-            print(f"Batch: {i+1}/{len(train_dataloader)}, Loss: {total_loss/(i+1)}")
-    
+  
     print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_dataloader)}")
 
-save_directory = './pretrained'  # Specify your save directory
+save_directory = './large-pretrained'  # Specify your save directory
 tokenizer.save_pretrained(save_directory)
 model.save_pretrained(save_directory)
+
+print("time taken = {time.time()-start}")
