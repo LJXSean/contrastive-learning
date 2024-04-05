@@ -1,57 +1,11 @@
+from transformers import AutoTokenizer
+from datasets import load_dataset
 import pandas as pd
 import json
 
-data_path_aclarc = "./acl-arc/scaffolds/sections-scaffold-train.jsonl"
-data_path_scicite = "./scicite/scaffolds/sections-scaffold-train.jsonl"
-with open(data_path_aclarc, encoding='utf-8') as data_file:
-    data = [json.loads(line) for line in data_file]
-    df = pd.DataFrame(data).drop_duplicates()
-
-sort_cols_section_paper = ['section_name', 'cited_paper_id']
-sort_cols_section = ['section_name']
-sort_cols = sort_cols_section_paper
-final_cols = ['text', 'text_pos', 'section_name', 'citing_paper_id', 'cited_paper_id']
-
-def split_and_concatenate(group):
-    # Calculate the split index
-    split_index = len(group) // 2
-    
-    # Split the group into two halves
-    first_half = group.iloc[:split_index].reset_index(drop=True)['text']
-    second_half = group.iloc[split_index:].reset_index(drop=True)
-    second_half.rename(columns={'text': 'text_pos'}, inplace=True)
-
-    # Concatenate the halves horizontally
-    concatenated = pd.concat([first_half, second_half], axis=1)
-    return concatenated
-
-# Gets samples using concatenation
-def get_pos_samples_concat(df):
-    df_concat = df.copy(deep=True)
-
-    # Dummy columns for groupby, to keep original columns
-    include_groups = [i + '_drop' for i in sort_cols]
-    df_concat[include_groups] = df_concat[sort_cols]
-    
-    result = df_concat.groupby(include_groups).apply(split_and_concatenate, include_groups=False).reset_index(drop=True)
-    return result
-
-concat = get_pos_samples_concat(df)
-
-# Replace NA with text_pos (dropout in roberta will treat this as unsupervised learning)
-def handle_na(df):
-    df.loc[pd.isna(df['text']), 'text'] = df.loc[pd.isna(df['text'])]['text_pos']
-
-handle_na(concat)
-
-concat[['text', 'text_pos']].to_csv('data_file.csv', index=False)
-
-from transformers import AutoTokenizer
-from datasets import load_dataset
-
 dataset = load_dataset("csv", data_files="data_file.csv")
 
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 column_names = dataset['train'].column_names
 
 # Testing
@@ -81,19 +35,20 @@ from torch.utils.data import DataLoader
 
 tokenized.set_format("torch")
 
-small_train_dataset = tokenized.shuffle(seed=42).select(range(6144))
-train_dataloader = DataLoader(small_train_dataset, shuffle=True, batch_size=32)
-#train_dataloader = DataLoader(tokenized, shuffle=True, batch_size=32)
+# 80-20 Train-Test split
+train_size = int(0.8 * len(tokenized))
+test_size = len(tokenized) - train_size
 
-for batch in train_dataloader:
-    # Shape = [#featuress, #batch_size, #tensor_length]
-    print(batch['input_ids'].shape)
-    break
+train_dataset = tokenized.shuffle(seed=42).select(range(train_size))
+test_dataset = tokenized.shuffle(seed=42).select(range(train_size, train_size+test_size))
+
+train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=64)
+test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=64)
 
 import torch
 import torch.nn as nn
 
-def contrastive_loss(embeddings, temperature=0.1):
+def contrastive_loss(embeddings, temperature=0.1, train=True):
     sents_per_vector = embeddings.size(1)
 
     if sents_per_vector < 2 or sents_per_vector > 3:
@@ -119,16 +74,19 @@ def contrastive_loss(embeddings, temperature=0.1):
     
     pairwise_sim /= temperature
 
-    loss = nn.CrossEntropyLoss()
-    output = loss(pairwise_sim, target)
+    if train:
+        loss = nn.CrossEntropyLoss()
+        output = loss(pairwise_sim, target)
 
-    return output
-
+        return output
+    else:
+        predicted = torch.argmax(pairwise_sim, dim=1)
+        return predicted, target
+    
 from torch.optim import AdamW
 from transformers import RobertaModel
-import time
 
-def train(batch):
+def encoder(batch, model):
     input_ids = batch['input_ids']
     attention_mask = batch['attention_mask']
     batch_size, sents_per_vector, tensor_size = input_ids.shape
@@ -138,34 +96,63 @@ def train(batch):
     attention_mask = torch.reshape(attention_mask, (-1, tensor_size))
 
     # Use [CLS] token representation
+    # data augmentation handled by roberta, dropout implemented under the hood
     outputs = model(input_ids=input_ids, attention_mask=attention_mask)
     embeddings = outputs.last_hidden_state[:, 0]
+
+    # Add dropout layer for better performance?
 
     # Reshape back to nested tensors
     embeddings = torch.reshape(embeddings, (batch_size, sents_per_vector, -1))
     return embeddings
 
 model = RobertaModel.from_pretrained('roberta-base')
+model.train()
+
 optimizer = AdamW(model.parameters(), lr=5e-5)
-epochs = 2
-start = time.time()
+epochs = 4
+
 for epoch in range(epochs):
     total_loss = 0
     # Shape = [#features, #batch_size, #tensor_length]
     for i, batch in enumerate(train_dataloader):
         optimizer.zero_grad()
 
-        embeddings = train(batch)
+        embeddings = encoder(batch, model)
         loss = contrastive_loss(embeddings)
         loss.backward()
         optimizer.step()
         
         total_loss += loss.item()
-  
     print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_dataloader)}")
 
-save_directory = './large-pretrained'  # Specify your save directory
+save_directory = './largest'  # Specify your save directory
 tokenizer.save_pretrained(save_directory)
 model.save_pretrained(save_directory)
 
-print("time taken = {time.time()-start}")
+from datasets import load_metric
+
+def evaluate(data_loader, model):
+    y_pred, y_test = [], []
+    model.eval()
+
+    f1_metric = load_metric('f1')
+
+    for i, batch in enumerate(data_loader):
+        with torch.no_grad():
+            outputs = encoder(batch, model)
+            
+        y_pred_batch, y_batch = contrastive_loss(outputs, train=False)
+        y_test += list(y_batch.detach().numpy())
+        y_pred += list(y_pred_batch.detach().numpy())
+
+        f1_metric.add_batch(predictions=y_pred_batch, references=y_batch)
+    
+    return f1_metric.compute(average='macro')
+
+model_names = ['largest']
+print('Evaluating....')
+for name in model_names:
+    model = RobertaModel.from_pretrained(name)
+    f1 = evaluate(test_dataloader, model)
+    print(f'f1 for {name}: {f1}')
