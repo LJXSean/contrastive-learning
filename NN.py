@@ -42,8 +42,8 @@ test_size = len(tokenized) - train_size
 train_dataset = tokenized.shuffle(seed=42).select(range(train_size))
 test_dataset = tokenized.shuffle(seed=42).select(range(train_size, train_size+test_size))
 
-train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=64)
-test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=64)
+train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=32)
+test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=32)
 
 import torch
 import torch.nn as nn
