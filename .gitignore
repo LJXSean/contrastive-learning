@@ -2,3 +2,6 @@ env/
 pretrained/
 large-pretrained/
 __pycache__/
+**/
+for_my_testing.py
+*.csv
