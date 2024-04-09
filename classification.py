@@ -59,7 +59,7 @@ class CitationsDatasetWithoutInputExample():
 
 
 train_dataset = CitationsDatasetWithoutInputExample(train_data)
-train_batch_size = 32
+train_batch_size = 16
 train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=train_batch_size)
 
 
@@ -67,7 +67,7 @@ train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=train_batc
 
 
 dev_dataset = CitationsDatasetWithoutInputExample(dev_data)
-dev_batch_size = 32
+dev_batch_size = 16
 dev_dataloader = DataLoader(dev_dataset, shuffle=False, batch_size=dev_batch_size)
 
 
@@ -119,7 +119,7 @@ def evaluate(model, dataloader, loss_func):
 
 
 test_dataset = CitationsDatasetWithoutInputExample(test_data)
-test_batch_size = 32
+test_batch_size = 16
 test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=test_batch_size)
 
 
