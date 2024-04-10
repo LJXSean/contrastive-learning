@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[13]:
+# In[2]:
 
 
 import pandas as pd
@@ -20,7 +20,7 @@ import os
 
 # #### Tokenise data
 
-# In[14]:
+# In[3]:
 
 
 class CitationDataSet:
@@ -56,26 +56,28 @@ class CitationDataSet:
         dataset = self.dataset['train'].map(self.tokenize, batched=True, remove_columns=self.column_names)
 
         dataset.set_format("torch")
-        train_dataloader = DataLoader(dataset, shuffle=True, batch_size=32)
+        train_dataloader = DataLoader(dataset, shuffle=True, batch_size=5)
         return train_dataloader
 
 
 # #### Fine Tune Model
 
-# In[15]:
+# In[4]:
 
 
 # Uses [CLS] token representation
 class CitationIntentEncoder(nn.Module):
-    def __init__(self, sciBert):
+    def __init__(self, sciBert, dropout_p=0.5):
         super(CitationIntentEncoder, self).__init__()
         self.sentence_transformer = sciBert
+        self.dropout = nn.Dropout(dropout_p)
         self.dense = nn.Linear(768, 768)
         self.activation = nn.Tanh()
 
     def forward(self, input_ids, attention_mask):
         embeddings = self.sentence_transformer(input_ids, attention_mask)
         cls_representation = embeddings.last_hidden_state[:, 0]
+        cls_representation = self.dropout(cls_representation)
         x = self.dense(cls_representation)
         return self.activation(x)
 
@@ -94,7 +96,7 @@ def encoder(batch, model):
     return embeddings, labels
 
 
-# In[16]:
+# In[5]:
 
 
 miner = miners.MultiSimilarityMiner()
@@ -129,8 +131,10 @@ def train_and_save(save_directory, train_dataloader, mining=False, model_name='a
 
             if i % 10 == 0:
                 print(f"Batch: {i+1}/{len(train_dataloader)}")
+            break
         
         print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_dataloader)}")
+        break
 
     # Save the configuration of SciBERT separately
     torch.save(model.state_dict(), save_directory + '/CLModel_state_dict.bin')
@@ -138,11 +142,12 @@ def train_and_save(save_directory, train_dataloader, mining=False, model_name='a
     return model
 
 
-# In[17]:
+# In[8]:
 
 
 save_directory = './sectionPaper_mlp_without_hard'
-os.mkdir(save_directory)
+if not os.path.isdir(save_directory):
+    os.mkdir(save_directory)
 
 train_dataloader = CitationDataSet("data_file_sectionPaper.csv").get_dataloader()
 trained_model = train_and_save(save_directory, train_dataloader, True)
@@ -150,7 +155,7 @@ trained_model = train_and_save(save_directory, train_dataloader, True)
 
 # #### Sanity Check
 
-# In[18]:
+# In[ ]:
 
 
 # Load trained model
@@ -161,7 +166,7 @@ new_model = CitationIntentEncoder(sciBert)
 new_model.load_state_dict(torch.load('sectionPaper_mlp_without_hard/CLModel_state_dict.bin'))
 
 
-# In[19]:
+# In[ ]:
 
 
 sample_batch = None
@@ -176,7 +181,7 @@ with torch.no_grad():
     print(labels[0])
 
 
-# In[20]:
+# In[ ]:
 
 
 new_model.eval()
