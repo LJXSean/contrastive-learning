@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[13]:
 
 
 import pandas as pd
@@ -9,102 +9,18 @@ import json
 import torch
 from torch.optim import AdamW
 from transformers import AutoModel
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from pytorch_metric_learning import miners, losses
 from datasets import load_metric
-
-
-# In[2]:
-
-
-data_path_aclarc = "./acl-arc/scaffolds/sections-scaffold-train.jsonl"
-data_path_scicite = "./scicite/scaffolds/sections-scaffold-train.jsonl"
-with open(data_path_aclarc, encoding='utf-8') as data_file:
-    data = [json.loads(line) for line in data_file]
-    df = pd.DataFrame(data).drop_duplicates()
-
-
-# #### Positive Sampling
-
-# In[3]:
-
-
-final_cols = ['text', 'text_pos', 'label']
-
-def split_and_concatenate(group):
-    # Calculate the split index
-    split_index = len(group) // 2
-    
-    # Split the group into two halves
-    first_half = group.iloc[:split_index].reset_index(drop=True)['text']
-    second_half = group.iloc[split_index:].reset_index(drop=True)
-    second_half.rename(columns={'text': 'text_pos'}, inplace=True)
-
-    # Concatenate the halves horizontally
-    concatenated = pd.concat([first_half, second_half], axis=1)
-    return concatenated
-
-# Gets samples using concatenation
-def get_pos_samples_concat(df, sort_cols):
-    df_concat = df.copy(deep=True)
-
-    # Dummy columns for groupby, to keep original columns
-    include_groups = [i + '_drop' for i in sort_cols]
-    df_concat[include_groups] = df_concat[sort_cols]
-    
-    result = df_concat.groupby(include_groups).apply(split_and_concatenate, include_groups=False).reset_index(drop=True)
-    return result
-
-def add_label(result, sort_cols):
-    # Add Label
-    if len(sort_cols) > 1:
-        result['combined'] = result[sort_cols].T.agg(''.join)
-    else:
-        result['combined'] = result[sort_cols]
-
-    labels, _ = pd.factorize(result['combined'])
-    result['label'] = labels
-
-    return result[final_cols]
-
-# Replace NA with text_pos (dropout in roberta will treat this as unsupervised learning)
-def handle_na(df):
-    df.loc[pd.isna(df['text']), 'text'] = df.loc[pd.isna(df['text'])]['text_pos']
-
-def process_data(df, sort_cols):
-    concat = get_pos_samples_concat(df, sort_cols=sort_cols)
-    concat_with_labels = add_label(concat, sort_cols)
-    handle_na(concat_with_labels)
-    return concat_with_labels
-
-section_paper = ['section_name', 'cited_paper_id']
-section = ['section_name']
-
-concat_section_paper = process_data(df, sort_cols=section_paper)
-concat_section = process_data(df, sort_cols=section)
-
-
-# #### Exploration
-
-# In[4]:
-
-
-print(concat_section_paper['label'].value_counts())
-print(concat_section['label'].value_counts())
-
-
-# In[5]:
-
-
-concat_section_paper.to_csv('data_file_sectionPaper.csv', index=False)
-concat_section.to_csv('data_file_section.csv', index=False)
+from torch import nn
+import os
 
 
 # #### Tokenise data
 
-# In[6]:
+# In[14]:
 
 
 class CitationDataSet:
@@ -146,10 +62,23 @@ class CitationDataSet:
 
 # #### Fine Tune Model
 
-# In[7]:
+# In[15]:
 
 
 # Uses [CLS] token representation
+class CitationIntentEncoder(nn.Module):
+    def __init__(self, sciBert):
+        super(CitationIntentEncoder, self).__init__()
+        self.sentence_transformer = sciBert
+        self.dense = nn.Linear(768, 768)
+        self.activation = nn.Tanh()
+
+    def forward(self, input_ids, attention_mask):
+        embeddings = self.sentence_transformer(input_ids, attention_mask)
+        cls_representation = embeddings.last_hidden_state[:, 0]
+        x = self.dense(cls_representation)
+        return self.activation(x)
+
 def encoder(batch, model):
     input_ids = batch['input_ids']
     attention_mask = batch['attention_mask']
@@ -161,23 +90,24 @@ def encoder(batch, model):
     labels = labels.repeat(2)
 
     # Data augmentation handled by scibert, dropout implemented under the hood
-    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-    embeddings = outputs.last_hidden_state[:, 0]
+    embeddings = model(input_ids, attention_mask)
     return embeddings, labels
 
 
-# In[8]:
+# In[16]:
 
 
 miner = miners.MultiSimilarityMiner()
 loss_func = losses.NTXentLoss(temperature=0.07)
 
 def train_and_save(save_directory, train_dataloader, mining=False, model_name='allenai/scibert_scivocab_uncased'):
-    model = AutoModel.from_pretrained(model_name)
+    sciBert = AutoModel.from_pretrained(model_name)
+    model = CitationIntentEncoder(sciBert)
+    
     model.train()
 
     optimizer = AdamW(model.parameters(), lr=5e-5)
-    epochs = 2
+    epochs = 3
 
     for epoch in range(epochs):
         total_loss = 0
@@ -199,29 +129,59 @@ def train_and_save(save_directory, train_dataloader, mining=False, model_name='a
 
             if i % 10 == 0:
                 print(f"Batch: {i+1}/{len(train_dataloader)}")
-
+        
         print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_dataloader)}")
-    
-    model.save_pretrained(save_directory)
+
+    # Save the configuration of SciBERT separately
+    torch.save(model.state_dict(), save_directory + '/CLModel_state_dict.bin')
+    model.sentence_transformer.config.save_pretrained(save_directory)
+    return model
 
 
-# In[9]:
+# In[17]:
 
+
+save_directory = './sectionPaper_mlp_without_hard'
+os.mkdir(save_directory)
 
 train_dataloader = CitationDataSet("data_file_sectionPaper.csv").get_dataloader()
-train_and_save('./sectionPaper_with_hard', train_dataloader, True)
-
-"""
-train_and_save('./sectionPaper_without_hard', train_dataloader, False)
-
-train_dataloader = CitationDataSet('data_file_section.csv').get_dataloader()
-train_and_save('./section_with_hard', train_dataloader, True)
-train_and_save('./section_without_hard', train_dataloader, False)
-"""
+trained_model = train_and_save(save_directory, train_dataloader, True)
 
 
-# In[ ]:
+# #### Sanity Check
+
+# In[18]:
 
 
+# Load trained model
+config = AutoConfig.from_pretrained('./sectionPaper_mlp_without_hard')
+sciBert = AutoModel.from_config(config)
+new_model = CitationIntentEncoder(sciBert)
 
+new_model.load_state_dict(torch.load('sectionPaper_mlp_without_hard/CLModel_state_dict.bin'))
+
+
+# In[19]:
+
+
+sample_batch = None
+for i, batch in enumerate(train_dataloader):
+    sample_batch = batch
+    break
+
+trained_model.eval()
+with torch.no_grad():
+    embeddings, labels = encoder(sample_batch, trained_model)
+    print(embeddings[0][:10])
+    print(labels[0])
+
+
+# In[20]:
+
+
+new_model.eval()
+with torch.no_grad():
+    embeddings, labels = encoder(sample_batch, new_model)
+    print(embeddings[0][:10])
+    print(labels[0])
 
