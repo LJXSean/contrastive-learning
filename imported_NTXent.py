@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[2]:
+# In[1]:
 
 
 import pandas as pd
@@ -20,7 +20,7 @@ import os
 
 # #### Tokenise data
 
-# In[3]:
+# In[2]:
 
 
 class CitationDataSet:
@@ -62,7 +62,7 @@ class CitationDataSet:
 
 # #### Fine Tune Model
 
-# In[4]:
+# In[3]:
 
 
 # Uses [CLS] token representation
@@ -96,7 +96,7 @@ def encoder(batch, model):
     return embeddings, labels
 
 
-# In[5]:
+# In[4]:
 
 
 miner = miners.MultiSimilarityMiner()
@@ -142,10 +142,10 @@ def train_and_save(save_directory, train_dataloader, mining=False, model_name='a
     return model
 
 
-# In[8]:
+# In[5]:
 
 
-save_directory = './sectionPaper_mlp_without_hard'
+save_directory = './sectionPaper_mlp_dropout_without_hard'
 if not os.path.isdir(save_directory):
     os.mkdir(save_directory)
 
@@ -155,18 +155,18 @@ trained_model = train_and_save(save_directory, train_dataloader, True)
 
 # #### Sanity Check
 
-# In[ ]:
+# In[6]:
 
 
 # Load trained model
-config = AutoConfig.from_pretrained('./sectionPaper_mlp_without_hard')
+config = AutoConfig.from_pretrained(save_directory)
 sciBert = AutoModel.from_config(config)
 new_model = CitationIntentEncoder(sciBert)
 
-new_model.load_state_dict(torch.load('sectionPaper_mlp_without_hard/CLModel_state_dict.bin'))
+new_model.load_state_dict(torch.load(save_directory + '/CLModel_state_dict.bin'))
 
 
-# In[ ]:
+# In[7]:
 
 
 sample_batch = None
@@ -181,7 +181,7 @@ with torch.no_grad():
     print(labels[0])
 
 
-# In[ ]:
+# In[8]:
 
 
 new_model.eval()
