@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[22]:
 
 
 import math
@@ -13,14 +13,14 @@ from torch import nn
 from collections import defaultdict
 from torch.utils.data import DataLoader
 
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, AutoConfig
 from datasets import load_dataset
 from torch.optim import AdamW
 
 from sklearn.metrics import f1_score
 
 
-# In[4]:
+# In[23]:
 
 
 file_path_train = 'scicite/train.jsonl'
@@ -40,7 +40,7 @@ with open(file_path_test, 'r', encoding='utf-8') as file:
         test_data.append(json.loads(line))
 
 
-# In[5]:
+# In[24]:
 
 
 class CitationsDatasetWithoutInputExample():
@@ -55,7 +55,7 @@ class CitationsDatasetWithoutInputExample():
         return self.data[item]['string'], CitationsDatasetWithoutInputExample.label_to_id[self.data[item]['label']]
 
 
-# In[6]:
+# In[25]:
 
 
 train_dataset = CitationsDatasetWithoutInputExample(train_data)
@@ -63,7 +63,7 @@ train_batch_size = 16
 train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=train_batch_size)
 
 
-# In[7]:
+# In[26]:
 
 
 dev_dataset = CitationsDatasetWithoutInputExample(dev_data)
@@ -71,21 +71,46 @@ dev_batch_size = 16
 dev_dataloader = DataLoader(dev_dataset, shuffle=False, batch_size=dev_batch_size)
 
 
-# In[18]:
+# In[27]:
+
+
+class CitationIntentEncoder(nn.Module):
+    def __init__(self, sciBert):
+        super(CitationIntentEncoder, self).__init__()
+        self.sentence_transformer = sciBert
+        self.dense = nn.Linear(768, 768)
+        self.activation = nn.Tanh()
+
+    def forward(self, input_ids, attention_mask):
+        embeddings = self.sentence_transformer(input_ids, attention_mask)
+        cls_representation = embeddings.last_hidden_state[:, 0]
+        x = self.dense(cls_representation)
+        return self.activation(x)
+
+def load_CLModel(save_directory):
+    # Load trained model
+    config = AutoConfig.from_pretrained(save_directory)
+    sciBert = AutoModel.from_config(config)
+    CL_model = CitationIntentEncoder(sciBert)
+
+    CL_model.load_state_dict(torch.load(save_directory + '/CLModel_state_dict.bin'))
+    return CL_model
+
+
+# In[28]:
 
 
 class CitationIntentClassifier(nn.Module):
     def __init__(self, model_path, num_labels):
         super(CitationIntentClassifier, self).__init__()
         self.tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
-        self.sentence_transformer = AutoModel.from_pretrained(model_path)
+        self.sentence_transformer = load_CLModel(model_path)
         self.classifier = nn.Linear(768, num_labels)
 
     def forward(self, input_texts):
-        tokenised = self.tokenizer(input_texts, return_tensors='pt', truncation=True, padding='max_length', max_length=256)
-        embeddings = self.sentence_transformer(**tokenised)
-        cls_representation = embeddings.last_hidden_state[:, 0]
-        return self.classifier(cls_representation)
+        tokenised = self.tokenizer(input_texts, return_tensors='pt', truncation=True, padding='max_length', max_length=256)        
+        embeddings = self.sentence_transformer(input_ids=tokenised['input_ids'], attention_mask=tokenised['attention_mask'])
+        return self.classifier(embeddings)
 
 def train_epoch(model, dataloader, loss_func, optimizer):
     model.train()
@@ -115,7 +140,7 @@ def evaluate(model, dataloader, loss_func):
     print(f"Evaluation accuracy: {total_correct / len(dataloader.dataset)}")
 
 
-# In[8]:
+# In[30]:
 
 
 test_dataset = CitationsDatasetWithoutInputExample(test_data)
@@ -123,7 +148,7 @@ test_batch_size = 16
 test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=test_batch_size)
 
 
-# In[8]:
+# In[31]:
 
 
 def test(model, dataloader):
@@ -137,6 +162,7 @@ def test(model, dataloader):
             _, predicted_labels = torch.max(output, dim=1)
             predictions.extend(predicted_labels.cpu().numpy())
             true_labels.extend(labels.cpu().numpy())
+
     return predictions, true_labels
 
 
@@ -161,9 +187,9 @@ def train_test_loop(model_name):
     print(f"F1 Score: {f1}")
 
 
-# In[9]:
+# In[32]:
 
 
-train_test_loop('./sectionPaper_with_hard')
+train_test_loop('./sectionPaper_mlp_without_hard')
 #train_test_loop('./sectionPaper_without_hard')
 
